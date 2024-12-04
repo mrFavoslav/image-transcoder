@@ -1,56 +1,57 @@
 const fs = require('fs');
+const fsExtra = require('fs-extra');
 const path = require('path');
 const { Worker } = require('worker_threads');
+const util = require('util');
 
 const folderPath = './out';
 const outputFolder = './output';
+const tempFolder = './temp';
+const MAX_WORKERS = 24; // Maximální počet workerů
 
-// Create the output folder if it doesn't exist
-if (!fs.existsSync(outputFolder)) {
-  fs.mkdirSync(outputFolder);
+const args = process.argv.slice(2);
+const clearTemp = args.includes('-ct');
+const clearOutput = args.includes('-co');
+
+// Vytvořte složky, pokud neexistují
+if (!fs.existsSync(outputFolder) || !fs.existsSync(tempFolder)) {
+  !fs.existsSync(outputFolder) && fs.mkdirSync(outputFolder);
+  !fs.existsSync(tempFolder) && fs.mkdirSync(tempFolder);
 }
 
-// Function to create a progress bar
+// Vyčistěte složky, pokud je to požadováno
+if (clearTemp) fsExtra.emptyDirSync(tempFolder);
+if (clearOutput) fsExtra.emptyDirSync(outputFolder);
+
+// Funkce pro vytvoření pokrokového ukazatele
 function createIntermediateProgressOutput(taskName, totalSteps, labelWidth = 40) {
   let lastDisplayed = 0;
-
   return function (currentStep) {
     const progress = (currentStep / totalSteps) * 100;
     const roundedProgress = Math.max(0, Math.min(100, Math.round(progress)));
-
     if (roundedProgress === lastDisplayed) return null;
 
     lastDisplayed = roundedProgress;
-
     const filled = "█".repeat(Math.floor(roundedProgress / 5));
     const unfilled = "░".repeat(20 - filled.length);
-
     const paddedTaskName = taskName.padEnd(labelWidth, ' ');
 
     return `${paddedTaskName}[${filled}${unfilled}] ${roundedProgress}%`;
   };
 }
 
-// Function to convert nibbles to bytes with progress
-function nibblesToBytes(nibbles, progressOutput) {
+// Funkce pro převod nibbles na bajty
+function nibblesToBytes(nibbles) {
   const bytes = [];
   for (let i = 0; i < nibbles.length; i += 2) {
     const byte = (parseInt(nibbles[i], 2) << 4) | parseInt(nibbles[i + 1], 2);
     bytes.push(byte);
-
-    const progressBar = progressOutput(i + 2);
-    if (progressBar) {
-      process.stdout.clearLine();
-      process.stdout.cursorTo(0);
-      process.stdout.write(progressBar);
-    }
   }
-  console.log(""); // Ensure a clean line after the progress bar finishes
   return bytes;
 }
 
-// Function to extract file data with progress
-function extractFileData(nibbles, progressOutput) {
+// Funkce pro extrakci dat ze souboru
+function extractFileData(nibbles) {
   const dataNibbles = [];
   const nameNibbles = [];
   let isReadingName = false;
@@ -65,99 +66,103 @@ function extractFileData(nibbles, progressOutput) {
         i = nibbles.length;
         break;
       default:
-        if (isReadingName) {
-          nameNibbles.push(nibble);
-        } else {
-          dataNibbles.push(nibble);
-        }
-    }
-
-    const progressBar = progressOutput(i + 1);
-    if (progressBar) {
-      process.stdout.clearLine();
-      process.stdout.cursorTo(0);
-      process.stdout.write(progressBar);
+        if (isReadingName) nameNibbles.push(nibble);
+        else dataNibbles.push(nibble);
     }
   }
-  console.log("");
   return { dataNibbles, nameNibbles };
 }
 
-// Main script
-fs.readdir(folderPath, async (err, files) => {
-  if (err) return console.error('Error reading folder:', err);
+// Funkce pro zpracování souborů s omezeným počtem workerů
+async function processWithLimitedWorkers(filePaths, maxWorkers) {
+  const progressTracker = new Array(filePaths.length).fill(0);
+  const processFilesProgress = createIntermediateProgressOutput('Processing Images ->', filePaths.length);
+  let completedFiles = 0;
 
-  files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const results = [];
+  const activeWorkers = new Set();
 
-  try {
-    const filePaths = files.map((file) => path.join(folderPath, file));
-    const totalFiles = filePaths.length;
-
-    const progressTracker = new Array(totalFiles).fill(0);
-    const processFilesProgress = createIntermediateProgressOutput('Processing Files ->', totalFiles);
-
-    const results = await Promise.all(
-      filePaths.map((filePath, index) =>
-        new Promise((resolve, reject) => {
-          const worker = new Worker('./imageWorker.js', { workerData: filePath });
-
-          worker.on('message', (message) => {
-            if (typeof message === 'number') {
-              progressTracker[index] = message;
-
-              const completedFiles = progressTracker.filter((progress) => progress === 100).length;
-              const progressBar = processFilesProgress(completedFiles);
-
-              if (progressBar) {
-                process.stdout.clearLine();
-                process.stdout.cursorTo(0);
-                process.stdout.write(progressBar);
-              }
-            } else {
-              resolve(message);
-            }
-          });
-
-          worker.on('error', reject);
-          worker.on('exit', (code) => {
-            if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
-          });
-        })
-      )
-    );
-    console.log("");
-
-    const allNibbles = results.flat();
-    const extractProgress = createIntermediateProgressOutput('Extracting File Data ->', allNibbles.length);
-
-    const { dataNibbles, nameNibbles } = extractFileData(allNibbles, extractProgress);
-
-
-    const convertProgressData = createIntermediateProgressOutput('Data: Converting Nibbles to Bytes ->', dataNibbles.length);
-    const dataBytes = nibblesToBytes(dataNibbles, convertProgressData);
-
-    const convertProgressName = createIntermediateProgressOutput('Name: Converting Nibbles to Bytes ->', nameNibbles.length);
-    const nameBytes = nibblesToBytes(nameNibbles, convertProgressName);
-
-
-    const decodedName = nameBytes.length
-      ? Buffer.from(nameBytes).toString('utf-8')
-      : 'out.bin';
-
-    const saveProgress = createIntermediateProgressOutput('Saving File ->', 1);
-    const progressBar = saveProgress(1);
-    if (progressBar) {
-      process.stdout.clearLine();
-      process.stdout.cursorTo(0);
-      process.stdout.write(progressBar);
+  for (const filePath of filePaths) {
+    while (activeWorkers.size >= maxWorkers) {
+      await Promise.race(activeWorkers);
     }
 
-    const outputFilePath = path.join(outputFolder, decodedName);
-    fs.writeFileSync(outputFilePath, Buffer.from(dataBytes));
+    const workerPromise = new Promise((resolve, reject) => {
+      const worker = new Worker('./imageWorker.js', { workerData: filePath });
 
-    console.log("");
-    console.log(`\nSoubor ${decodedName} byl úspěšně vytvořen.`);
+      worker.on('message', (message) => {
+        if (typeof message === 'number') {
+          progressTracker[filePaths.indexOf(filePath)] = message;
+
+          completedFiles = progressTracker.filter((progress) => progress === 100).length;
+          const progressBar = processFilesProgress(completedFiles);
+
+          if (progressBar) {
+            process.stdout.clearLine();
+            process.stdout.cursorTo(0);
+            process.stdout.write(progressBar);
+          }
+        } else {
+          resolve(message);
+        }
+      });
+
+      worker.on('error', reject);
+      worker.on('exit', (code) => {
+        if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+      });
+    });
+
+    activeWorkers.add(workerPromise);
+    workerPromise.finally(() => activeWorkers.delete(workerPromise));
+    results.push(workerPromise);
+  }
+
+  await Promise.all(results);
+  console.log("");
+  return results;
+}
+
+async function main() {
+  try {
+    const files = fs.readdirSync(folderPath).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+    const filePaths = files.map((file) => path.join(folderPath, file));
+    const results = await processWithLimitedWorkers(filePaths, MAX_WORKERS);
+    const resolvedResults = await Promise.all(results);
+
+    const streamFinished = util.promisify(require('stream').finished);
+    const extractProgress = createIntermediateProgressOutput('Saving file ->', results.length);
+    let dataFileStream;
+
+    resolvedResults.forEach((tempFilePath, index) => {
+      const fileContent = fs.readFileSync(tempFilePath, 'utf-8');
+      const nibbles = fileContent.split(' ');
+
+      const { dataNibbles, nameNibbles } = extractFileData(nibbles);
+
+      if (nameNibbles.length > 0) {
+        const extractedName = Buffer.from(nibblesToBytes(nameNibbles)).toString('utf-8').trim();
+        dataFileStream = fs.createWriteStream(path.join(outputFolder, extractedName));
+      }
+
+      dataFileStream.write(Buffer.from(nibblesToBytes(dataNibbles)));
+
+      const progressBar = extractProgress(index + 1);
+      if (progressBar) {
+        process.stdout.clearLine();
+        process.stdout.cursorTo(0);
+        process.stdout.write(progressBar);
+      }
+    });
+
+    dataFileStream.end();
+    await streamFinished(dataFileStream);
+
   } catch (error) {
     console.error('Error processing files:', error);
   }
-});
+}
+
+main();

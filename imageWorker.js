@@ -1,6 +1,7 @@
 const { workerData, parentPort } = require('worker_threads');
 const sharp = require('sharp');
-
+const fs = require('fs');
+const path = require('path');
 
 const colorMap = {
     '0000': { r: 255, g: 255, b: 255 },
@@ -51,7 +52,8 @@ async function decodeImage(imagePath) {
   const image = sharp(imagePath);
   const { width, height } = await image.metadata();
   const buffer = await image.raw().toBuffer();
-  const nibbles = [];
+  let nibbles = [];
+  const tempFilePath = path.join('./temp', `${path.parse(imagePath).name}.bin`);
   const totalPixels = width * height;
   let lastReportedProgress = 0;
 
@@ -59,6 +61,7 @@ async function decodeImage(imagePath) {
     const r = buffer[i];
     const g = buffer[i + 1];
     const b = buffer[i + 2];
+
     nibbles.push(findClosestNibble(r, g, b));
 
     const processedPixels = Math.floor(i / 3);
@@ -71,9 +74,11 @@ async function decodeImage(imagePath) {
   }
 
   parentPort.postMessage(100);
-  return nibbles;
+  fs.writeFileSync(tempFilePath, nibbles.join(' '));
+  nibbles = [];
+  return tempFilePath;
 }
 
 decodeImage(workerData)
-  .then((nibbles) => parentPort.postMessage(nibbles))
+  .then((tempFilePath) => parentPort.postMessage(tempFilePath))
   .catch((err) => parentPort.postMessage({ error: err.message }));

@@ -3,3 +3,5 @@ OLD/node_modules
 out/*
 output/*
 test/*
+temp/*
+dev/*
