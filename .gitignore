@@ -1,2 +1,5 @@
 node_modules
 OLD/node_modules
+out/*
+output/*
+test/*

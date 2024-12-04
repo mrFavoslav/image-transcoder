@@ -9,6 +9,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "async": "^3.2.6",
     "fs": "^0.0.1-security",
     "fs-extra": "^11.2.0",
     "path": "^0.12.7",
