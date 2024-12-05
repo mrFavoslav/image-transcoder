@@ -148,12 +148,12 @@ async function ConvertFileToBinaryStream(filePath) {
       console.log('\nFile reading completed.');
       console.timeEnd("Processing Time");
       progressWorker.terminate();
-      resolve();  // Resolve when processing is finished
+      resolve();
     });
 
     stream.on('error', (err) => {
       console.error('Error reading file:', err.message);
-      reject(err);  // Reject if there's an error
+      reject(err);
     });
   });
 }
@@ -164,9 +164,9 @@ function getAllFiles(dirPath, filesArray = []) {
   files.forEach(file => {
     const fullPath = path.join(dirPath, file);
     if (fs.statSync(fullPath).isDirectory()) {
-      getAllFiles(fullPath, filesArray); // Recursive call for subdirectories
+      getAllFiles(fullPath, filesArray);
     } else {
-      filesArray.push(fullPath); // Add full file path to the array
+      filesArray.push(fullPath);
     }
   });
 

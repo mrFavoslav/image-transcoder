@@ -8,23 +8,20 @@ const { exec } = require('child_process');
 const folderPath = path.join(__dirname, "./../out");
 const outputFolder = path.join(__dirname, "./../output");
 const tempFolder = path.join(__dirname, "./../temp");
-const MAX_WORKERS = 24; // Maximální počet workerů
+const MAX_WORKERS = 24;
 
 const args = process.argv.slice(2);
 const clearTemp = args.includes('-ct');
 const clearOutput = args.includes('-co');
 
-// Vytvořte složky, pokud neexistují
 if (!fs.existsSync(outputFolder) || !fs.existsSync(tempFolder)) {
   !fs.existsSync(outputFolder) && fs.mkdirSync(outputFolder);
   !fs.existsSync(tempFolder) && fs.mkdirSync(tempFolder);
 }
 
-// Vyčistěte složky, pokud je to požadováno
 if (clearTemp) fsExtra.emptyDirSync(tempFolder);
 if (clearOutput) fsExtra.emptyDirSync(outputFolder);
 
-// Funkce pro vytvoření pokrokového ukazatele
 function createIntermediateProgressOutput(taskName, totalSteps, labelWidth = 40) {
   let lastDisplayed = 0;
   return function (currentStep) {
@@ -41,7 +38,6 @@ function createIntermediateProgressOutput(taskName, totalSteps, labelWidth = 40)
   };
 }
 
-// Funkce pro převod nibbles na bajty
 function nibblesToBytes(nibbles) {
   const bytes = [];
   for (let i = 0; i < nibbles.length; i += 2) {
@@ -51,7 +47,6 @@ function nibblesToBytes(nibbles) {
   return bytes;
 }
 
-// Funkce pro extrakci dat ze souboru
 function extractFileData(nibbles) {
   const dataNibbles = [];
   const nameNibbles = [];
@@ -74,7 +69,6 @@ function extractFileData(nibbles) {
   return { dataNibbles, nameNibbles };
 }
 
-// Funkce pro zpracování souborů s omezeným počtem workerů
 async function processWithLimitedWorkers(filePaths, maxWorkers) {
   const progressTracker = new Array(filePaths.length).fill(0);
   const processFilesProgress = createIntermediateProgressOutput('Processing Images ->', filePaths.length);
