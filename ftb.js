@@ -4,6 +4,7 @@ const sharp = require('sharp');
 const fsExtra = require('fs-extra');
 const prompt = require('prompt-sync')();
 const { Worker } = require('worker_threads');
+const { exec } = require('child_process');
 
 const colorMap = {
   '0000': { r: 255, g: 255, b: 255 },
@@ -95,77 +96,135 @@ function GenerateImagesFromRGBData(width, height, outputDir) {
   CreateImageFromArray(paddedChunk, width, height, outputFilePath);
 }
 
-function ConvertFileToBinaryStream(filePath, callback) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error('File does not exist.');
-  }
-
-  const stats = fs.statSync(filePath);
-  const totalBytes = stats.size;
-  let processedBytes = 0;
-
-  const progressWorker = new Worker(path.join(__dirname, 'progressWorker.js'));
-
-  progressWorker.on('message', (progressBar) => {
-    process.stdout.clearLine();
-    process.stdout.cursorTo(0);
-    process.stdout.write(`Processing: ${progressBar}`);
-  });
-
-  const stream = fs.createReadStream(filePath);
-
-  stream.on('data', (chunk) => {
-    const chunkSize = chunk.length;
-    processedBytes += chunkSize;
-
-    const percentage = (processedBytes / totalBytes) * 100;
-
-    if (Math.round(percentage) % 1 === 0) {
-      progressWorker.postMessage(Math.round(percentage));
+async function ConvertFileToBinaryStream(filePath) {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(filePath)) {
+      reject(new Error('File does not exist.'));
+      return;
     }
 
-    const binaryData = Array.from(chunk).map(byte => byte.toString(2).padStart(8, '0'));
-    binaryData.forEach(data => {
-      const [part1, part2] = SplitByteTo2Nibbles(parseInt(data, 2));
-      RGBDataArray.push(GetColorFromNibble(part1), GetColorFromNibble(part2));
+    const stats = fs.statSync(filePath);
+    const totalBytes = stats.size;
+    let processedBytes = 0;
 
-      if (RGBDataArray.length >= imageWidth * imageHeight) {
-        GenerateImagesFromRGBData(imageWidth, imageHeight, output);
-        RGBDataArray = [];
+    const progressWorker = new Worker(path.join(__dirname, 'progressWorker.js'));
+
+    progressWorker.on('message', (progressBar) => {
+      process.stdout.clearLine();
+      process.stdout.cursorTo(0);
+      process.stdout.write(`Processing: ${progressBar}`);
+    });
+
+    const stream = fs.createReadStream(filePath);
+
+    stream.on('data', (chunk) => {
+      const chunkSize = chunk.length;
+      processedBytes += chunkSize;
+
+      const percentage = (processedBytes / totalBytes) * 100;
+
+      if (Math.round(percentage) % 1 === 0) {
+        progressWorker.postMessage(Math.round(percentage));
       }
+
+      const binaryData = Array.from(chunk).map(byte => byte.toString(2).padStart(8, '0'));
+      binaryData.forEach(data => {
+        const [part1, part2] = SplitByteTo2Nibbles(parseInt(data, 2));
+        RGBDataArray.push(GetColorFromNibble(part1), GetColorFromNibble(part2));
+
+        if (RGBDataArray.length >= imageWidth * imageHeight) {
+          GenerateImagesFromRGBData(imageWidth, imageHeight, output);
+          RGBDataArray = [];
+        }
+      });
+    });
+
+    stream.on('end', () => {
+      if (RGBDataArray.length > 0) {
+        RGBDataArray.push({ r: 128, g: 0, b: 128 });
+        GenerateImagesFromRGBData(imageWidth, imageHeight, output);
+      }
+      RGBDataArray = [];
+      console.log('\nFile reading completed.');
+      console.timeEnd("Processing Time");
+      progressWorker.terminate();
+      resolve();  // Resolve when processing is finished
+    });
+
+    stream.on('error', (err) => {
+      console.error('Error reading file:', err.message);
+      reject(err);  // Reject if there's an error
     });
   });
+}
 
-  stream.on('end', () => {
-    if (RGBDataArray.length > 0) {
-      RGBDataArray.push({ r: 128, g: 0, b: 128 });
-      GenerateImagesFromRGBData(imageWidth, imageHeight, output);
+function getAllFiles(dirPath, filesArray = []) {
+  const files = fs.readdirSync(dirPath);
+
+  files.forEach(file => {
+    const fullPath = path.join(dirPath, file);
+    if (fs.statSync(fullPath).isDirectory()) {
+      getAllFiles(fullPath, filesArray); // Recursive call for subdirectories
+    } else {
+      filesArray.push(fullPath); // Add full file path to the array
     }
-    console.log('\nFile reading completed.');
-    console.timeEnd("Processing Time");
-    progressWorker.terminate();
   });
 
-  stream.on('error', (err) => console.error('Error reading file:', err.message));
+  return filesArray;
+}
+
+function playSound(times, delay = 500) {
+  let count = 0;
+
+  const interval = setInterval(() => {
+    exec('powershell -c [System.Media.SystemSounds]::Beep.Play()', (err, stdout, stderr) => {
+      if (err) {
+        console.error('Error playing sound:', err);
+      }
+    });
+
+    count++;
+    if (count >= times) {
+      clearInterval(interval);
+    }
+  }, delay);
 }
 
 // --------------------------------------------------------------
 
 const imageWidth = 1920;
 const imageHeight = 1080;
-const inputFile = process.argv[2] || prompt("Define input file: ");
-const input = path.join(__dirname, inputFile);
+const input = process.argv[2] || prompt("Define input file: ");
 const output = path.join(__dirname, "out");
-const name = path.basename(input);
-fsExtra.emptyDirSync(output);
 
+fsExtra.emptyDirSync(output);
 console.time("Processing Time");
 
-PushFilename(name);
+async function processFiles(input) {
+  if (fs.statSync(input).isDirectory()) {
+    const allFiles = getAllFiles(input);
 
-ConvertFileToBinaryStream(input, (binaryData) => {
-  binaryData.forEach(data => {
-    const [part1, part2] = SplitByteTo2Nibbles(parseInt(data, 2));
-    RGBDataArray.push(GetColorFromNibble(part1), GetColorFromNibble(part2));
-  });
+    for (const file of allFiles) {
+      try {
+        PushFilename(file);
+        await ConvertFileToBinaryStream(file);
+      } catch (error) {
+        console.error('Error processing file:', error.message);
+      }
+    }
+  } else {
+    try {
+      PushFilename(input);
+      await ConvertFileToBinaryStream(input);
+    } catch (error) {
+      console.error('Error processing file:', error.message);
+    }
+  }
+}
+
+processFiles(input).then(() => {
+  playSound(1);
+  console.log('All files processed.');
+}).catch(err => {
+  console.error('Error during file processing:', err.message);
 });

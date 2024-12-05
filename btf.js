@@ -3,6 +3,7 @@ const fsExtra = require('fs-extra');
 const path = require('path');
 const { Worker } = require('worker_threads');
 const util = require('util');
+const { exec } = require('child_process');
 
 const folderPath = './out';
 const outputFolder = './output';
@@ -123,6 +124,23 @@ async function processWithLimitedWorkers(filePaths, maxWorkers) {
   return results;
 }
 
+function playSound(times, delay = 500) {
+  let count = 0;
+
+  const interval = setInterval(() => {
+    exec('powershell -c [System.Media.SystemSounds]::Beep.Play()', (err, stdout, stderr) => {
+      if (err) {
+        console.error('Error playing sound:', err);
+      }
+    });
+
+    count++;
+    if (count >= times) {
+      clearInterval(interval);
+    }
+  }, delay);
+}
+
 async function main() {
   try {
     const files = fs.readdirSync(folderPath).sort((a, b) =>
@@ -134,20 +152,72 @@ async function main() {
 
     const streamFinished = util.promisify(require('stream').finished);
     const extractProgress = createIntermediateProgressOutput('Saving file ->', results.length);
-    let dataFileStream;
+    let dataFileStream = null;
 
-    resolvedResults.forEach((tempFilePath, index) => {
-      const fileContent = fs.readFileSync(tempFilePath, 'utf-8');
-      const nibbles = fileContent.split(' ');
+    for (let index = 0; index < resolvedResults.length; index++) {
+      const tempFilePath = resolvedResults[index];
+      let fileContent = fs.readFileSync(tempFilePath);
+      const identifyFilePath = path.join(tempFolder, `${path.parse(tempFilePath).name}.identify`);
 
-      const { dataNibbles, nameNibbles } = extractFileData(nibbles);
+      if (fs.existsSync(identifyFilePath)) {
+        const identifyLines = fs.readFileSync(identifyFilePath, 'utf8').split('\n');
+        let currentByteOffset = 0;
 
-      if (nameNibbles.length > 0) {
-        const extractedName = Buffer.from(nibblesToBytes(nameNibbles)).toString('utf-8').trim();
-        dataFileStream = fs.createWriteStream(path.join(outputFolder, extractedName));
+        for (const line of identifyLines) {
+          if (!line.trim()) continue;
+
+          const regex = /^(\d+)-(\d+)\s([A|D])$/;
+          const match = line.match(regex);
+
+          if (!match) continue;
+
+          const start = parseInt(match[1], 10);
+          const end = parseInt(match[2], 10);
+          const identifier = match[3];
+
+          if (identifier === 'A') {
+            const extractedBytes = fileContent.slice(start, end);
+            const extractedName = extractedBytes.toString('utf-8').replace(/\0/g, '').trim();
+            const outputFilePath = path.join(outputFolder, extractedName);
+        
+            const outputDir = path.dirname(outputFilePath);
+            fsExtra.ensureDirSync(outputDir);
+        
+            if (dataFileStream) {
+                dataFileStream.end();
+                await streamFinished(dataFileStream);
+            }
+        
+            dataFileStream = fs.createWriteStream(outputFilePath);
+            currentByteOffset = 0;
+        
+            fileContent = Buffer.concat([
+                fileContent.slice(0, start),
+                fileContent.slice(end),
+            ]);
+          }
+
+          if (identifier === 'D') {
+            const bytesToWrite = end - currentByteOffset;
+            const contentToWrite = fileContent.slice(0, bytesToWrite);
+
+            if (dataFileStream) {
+              dataFileStream.write(contentToWrite);
+              currentByteOffset += contentToWrite.length;
+              dataFileStream.end();
+              await streamFinished(dataFileStream);
+              dataFileStream = null;
+            }
+
+            fileContent = fileContent.slice(bytesToWrite);
+          }
+        }
       }
 
-      dataFileStream.write(Buffer.from(nibblesToBytes(dataNibbles)));
+      if (dataFileStream) {
+        dataFileStream.write(fileContent);
+        fileContent = null;
+      }
 
       const progressBar = extractProgress(index + 1);
       if (progressBar) {
@@ -155,14 +225,17 @@ async function main() {
         process.stdout.cursorTo(0);
         process.stdout.write(progressBar);
       }
-    });
+    }
 
-    dataFileStream.end();
-    await streamFinished(dataFileStream);
-
+    if (dataFileStream) {
+      dataFileStream.end();
+      await streamFinished(dataFileStream);
+    }
   } catch (error) {
     console.error('Error processing files:', error);
+    playSound(2, 500);
   }
+  playSound(1);
 }
 
 main();
