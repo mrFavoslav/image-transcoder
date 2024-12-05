@@ -5,9 +5,9 @@ const { Worker } = require('worker_threads');
 const util = require('util');
 const { exec } = require('child_process');
 
-const folderPath = './out';
-const outputFolder = './output';
-const tempFolder = './temp';
+const folderPath = path.join(__dirname, "./../out");
+const outputFolder = path.join(__dirname, "./../output");
+const tempFolder = path.join(__dirname, "./../temp");
 const MAX_WORKERS = 24; // Maximální počet workerů
 
 const args = process.argv.slice(2);
