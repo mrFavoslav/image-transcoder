@@ -6,3 +6,5 @@ test*/*
 temp/*
 dev/*
 imageWorker1.js
+test.js
+.gitignore

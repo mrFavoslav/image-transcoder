@@ -89,7 +89,7 @@ async function processWithLimitedWorkers(filePaths, maxWorkers) {
     }
 
     const workerPromise = new Promise((resolve, reject) => {
-      const worker = new Worker('./imageWorker.js', { workerData: filePath });
+      const worker = new Worker('./workers/imageWorker.js', { workerData: filePath });
 
       worker.on('message', (message) => {
         if (typeof message === 'number') {

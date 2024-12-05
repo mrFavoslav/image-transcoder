@@ -107,7 +107,7 @@ async function ConvertFileToBinaryStream(filePath) {
     const totalBytes = stats.size;
     let processedBytes = 0;
 
-    const progressWorker = new Worker(path.join(__dirname, 'progressWorker.js'));
+    const progressWorker = new Worker('./workers/progressWorker.js');
 
     progressWorker.on('message', (progressBar) => {
       process.stdout.clearLine();
