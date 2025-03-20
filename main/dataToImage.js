@@ -5,6 +5,8 @@ const fsExtra = require('fs-extra');
 const prompt = require('prompt-sync')();
 const { Worker } = require('worker_threads');
 const { exec } = require('child_process');
+const { calculateWorkerCount } = require('./utils.js');
+const { ProgressBar } = require('./ProgressBar.js');
 
 const colorMap = {
   '0000': { r: 255, g: 255, b: 255 },

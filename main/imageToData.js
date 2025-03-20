@@ -8,7 +8,7 @@ const { exec } = require('child_process');
 const folderPath = path.join(__dirname, "./../images");
 const outputFolder = path.join(__dirname, "./../output");
 const tempFolder = path.join(__dirname, "./../temp");
-const MAX_WORKERS = 24;
+const MAX_WORKERS = calculateWorkerCount(1920 * 1080);
 
 const args = process.argv.slice(2);
 const clearTemp = args.includes('-ct');

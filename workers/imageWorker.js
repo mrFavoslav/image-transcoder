@@ -1,4 +1,22 @@
 const { workerData, parentPort } = require('worker_threads');
+
+parentPort.on('message', (data) => {
+  const { chunk, index, type } = data;
+  
+  if (type === 'dataToImage') {
+    // Process data to image chunk
+    parentPort.postMessage({
+      progress: index + 1,
+      result: processChunk(chunk)
+    });
+  } else {
+    // Process image to data chunk  
+    parentPort.postMessage({
+      progress: index + 1,
+      result: processChunk(chunk)
+    });
+  }
+});
 const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
