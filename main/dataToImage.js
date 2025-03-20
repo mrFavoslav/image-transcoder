@@ -195,7 +195,7 @@ function playSound(times, delay = 500) {
 const imageWidth = 1920;
 const imageHeight = 1080;
 const input = process.argv[2] || prompt("Define input file: ");
-const output = path.join(__dirname, "./../out");
+const output = path.join(__dirname, "./../images");
 
 fsExtra.emptyDirSync(output);
 console.time("Processing Time");

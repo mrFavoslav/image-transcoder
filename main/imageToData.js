@@ -5,7 +5,7 @@ const { Worker } = require('worker_threads');
 const util = require('util');
 const { exec } = require('child_process');
 
-const folderPath = path.join(__dirname, "./../out");
+const folderPath = path.join(__dirname, "./../images");
 const outputFolder = path.join(__dirname, "./../output");
 const tempFolder = path.join(__dirname, "./../temp");
 const MAX_WORKERS = 24;
@@ -151,7 +151,7 @@ async function main() {
     for (let index = 0; index < resolvedResults.length; index++) {
       const tempFilePath = resolvedResults[index];
       let fileContent = fs.readFileSync(tempFilePath);
-      const identifyFilePath = path.join(tempFolder, `${path.parse(tempFilePath).name}.identify`);
+      const identifyFilePath = path.join(tempFolder, `${path.parse(tempFilePath).name}.id`);
 
       if (fs.existsSync(identifyFilePath)) {
         const identifyLines = fs.readFileSync(identifyFilePath, 'utf8').split('\n');

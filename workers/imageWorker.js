@@ -94,7 +94,7 @@ async function decodeImage(imagePath) {
   const buffer = await image.raw().toBuffer();
   let nibbles = [];
   const binaryFilePath = path.join('./temp', `${path.parse(imagePath).name}.bin`);
-  const identifyFilePath = path.join('./temp', `${path.parse(imagePath).name}.identify`);
+  const identifyFilePath = path.join('./temp', `${path.parse(imagePath).name}.id`);
   const totalPixels = width * height;
   let lastReportedProgress = 0;
 
