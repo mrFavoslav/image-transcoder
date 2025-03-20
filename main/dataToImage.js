@@ -107,13 +107,26 @@ async function ConvertFileToBinaryStream(filePath) {
     const totalBytes = stats.size;
     let processedBytes = 0;
 
-    const progressWorker = new Worker('./workers/progressWorker.js');
+    const ProgressBar = require('./progressBar');
+const os = require('os');
 
-    progressWorker.on('message', (progressBar) => {
-      process.stdout.clearLine();
-      process.stdout.cursorTo(0);
-      process.stdout.write(`Processing: ${progressBar}`);
-    });
+const MAX_WORKERS = os.cpus().length;
+const progress = new ProgressBar(totalBytes);
+
+const chunks = splitIntoChunks(input, Math.ceil(totalBytes / MAX_WORKERS));
+const workers = chunks.map((chunk, i) => {
+  const worker = new Worker('./workers/dataToImageWorker.js');
+  worker.postMessage({ chunk, workerId: i });
+  
+  worker.on('message', msg => {
+    if (msg.type === 'progress') {
+      progress.update(msg.processed);
+    }
+  });
+  return worker;
+});
+
+await Promise.all(workers.map(w => new Promise(resolve => w.on('exit', resolve))));
 
     const stream = fs.createReadStream(filePath);
 

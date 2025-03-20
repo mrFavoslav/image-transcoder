@@ -70,9 +70,14 @@ function extractFileData(nibbles) {
 }
 
 async function processWithLimitedWorkers(filePaths, maxWorkers) {
-  const progressTracker = new Array(filePaths.length).fill(0);
-  const processFilesProgress = createIntermediateProgressOutput('Processing Images ->', filePaths.length);
-  let completedFiles = 0;
+const ProgressBar = require('./progressBar');
+const progress = new ProgressBar(totalPixels);
+
+worker.on('message', msg => {
+  if (msg.type === 'progress') {
+    progress.update(msg.processed);
+  }
+});
 
   const results = [];
   const activeWorkers = new Set();
