@@ -1,4 +1,3 @@
-// main/dataToImage.js
 "use strict";
 
 const fs = require("fs");
@@ -212,6 +211,15 @@ function FlushCompleteImages(width, height, outputDir) {
 function FlushFinalImage(width, height, outputDir) {
   const expectedSize = width * height;
   if (RGBDataArray.length > 0) {
+    // Přesvědčíme se, že poslední pixel je marker D – pokud ne, vložíme ho.
+    if (
+      RGBDataArray.length === 0 ||
+      RGBDataArray[RGBDataArray.length - 1].r !== 128 ||
+      RGBDataArray[RGBDataArray.length - 1].g !== 0 ||
+      RGBDataArray[RGBDataArray.length - 1].b !== 128
+    ) {
+      RGBDataArray.push({ r: 128, g: 0, b: 128 });
+    }
     // Doplň chybějící pixely černou barvou
     const imageArray = RGBDataArray.concat(
       Array(expectedSize - RGBDataArray.length).fill({ r: 0, g: 0, b: 0 })
@@ -233,13 +241,14 @@ function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
       return;
     }
     const totalBytes = fs.statSync(filePath).size;
-    const progressManager = new ProgressManager(totalBytes);
+    // --- Úprava progress baru: předáváme aktuální název souboru do ProgressManageru.
+    const progressManager = new ProgressManager(totalBytes, path.basename(filePath));
     const pool = new DataWorkerPool(path.join(__dirname, "../workers/dataToImageWorker.js"), MAX_WORKERS, progressManager);
-    const CHUNK_SIZE = 1024 * 1024; // 1 MB – můžeš zkusit případně snížit, pokud je problém stále patrný
+    const CHUNK_SIZE = 1024 * 1024; // 1 MB
     let resultsMap = [];
     let nextProcessedIndex = 0;
     let chunkIndex = 0;
-    const chunkPromises = []; // sledujeme promise pro každý chunk
+    const chunkPromises = [];
     const stream = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE });
 
     stream.on("data", (chunk) => {
@@ -247,23 +256,18 @@ function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
         .runTask({ chunk, index: chunkIndex }, [chunk.buffer])
         .then((content) => {
           resultsMap[content.index] = content.result;
-          // Zpracujeme výsledky v pořadí
           while (resultsMap[nextProcessedIndex] !== undefined) {
             const dataToAdd = resultsMap[nextProcessedIndex];
-            // Místo push(...dataToAdd) použijeme bezpečnější iteraci přes data
             for (let i = 0; i < dataToAdd.length; i++) {
               RGBDataArray.push(dataToAdd[i]);
             }
-            delete resultsMap[nextProcessedIndex]; // uvolníme daný chunk
+            delete resultsMap[nextProcessedIndex];
             nextProcessedIndex++;
           }
           
-          // Funkce asynchronně zpracovávající generování obrázků,
-          // aby se zabránilo hluboké synchronní rekurzi
           function processImages() {
             if (RGBDataArray.length >= imageWidth * imageHeight) {
               GenerateImagesFromRGBData(imageWidth, imageHeight, output);
-              // Naplánujeme další iteraci mimo aktuální zásobník
               setImmediate(processImages);
             }
           }
@@ -278,7 +282,6 @@ function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
     stream.on("end", () => {
       Promise.all(chunkPromises)
         .then(() => {
-          // Flushujeme jen kompletní obrazy (neboť nedokončený blok chceme předat dalšímu souboru)
           FlushCompleteImages(imageWidth, imageHeight, output);
           // Ujistíme se, že progress bar dosáhne 100%
           const remaining = totalBytes - progressManager.completedWorkUnits;
@@ -333,14 +336,12 @@ async function processFiles(input) {
     for (let i = 0; i < allFiles.length; i++) {
       const file = allFiles[i];
       try {
+        // Zobrazíme název souboru, který se zpracovává (PushFilename vloží informativní pixely)
         PushFilename(file);
         await ConvertFileToRGB(file, imageWidth, imageHeight, output);
-        // Pokud to není poslední soubor, vložíme terminátor D
-        if (i < allFiles.length - 1) {
-          RGBDataArray.push({ r: 128, g: 0, b: 128 });
-          // Flushnout kompletní bloky, kdy by tento pixel mohl uzavřít jeden obraz
-          FlushCompleteImages(imageWidth, imageHeight, output);
-        }
+        // Vložíme terminátor D vždy po zpracování souboru, včetně posledního
+        RGBDataArray.push({ r: 128, g: 0, b: 128 });
+        FlushCompleteImages(imageWidth, imageHeight, output);
       } catch (error) {
         console.error("Error processing file:", error.message);
       }
@@ -349,11 +350,13 @@ async function processFiles(input) {
     try {
       PushFilename(input);
       await ConvertFileToRGB(input, imageWidth, imageHeight, output);
+      // Vložíme terminátor D i u jediného souboru
+      RGBDataArray.push({ r: 128, g: 0, b: 128 });
     } catch (error) {
       console.error("Error processing file:", error.message);
     }
   }
-  // Po zpracování všech souborů flushneme poslední (může být neúplný – ten se doplní černými pixely)
+  // Po zpracování všech souborů flushneme poslední (neúplný blok je doleplněn černými pixely)
   FlushFinalImage(imageWidth, imageHeight, output);
   await Promise.all(imageCreationPromises);
 }
