@@ -8,7 +8,7 @@ const { exec } = require('child_process');
 const folderPath = path.join(__dirname, "./../images");
 const outputFolder = path.join(__dirname, "./../output");
 const tempFolder = path.join(__dirname, "./../temp");
-const MAX_WORKERS = 24;
+const MAX_WORKERS = 12;
 
 const args = process.argv.slice(2);
 const clearTemp = args.includes('-ct');
@@ -28,12 +28,10 @@ function createIntermediateProgressOutput(taskName, totalSteps, labelWidth = 40)
     const progress = (currentStep / totalSteps) * 100;
     const roundedProgress = Math.max(0, Math.min(100, Math.round(progress)));
     if (roundedProgress === lastDisplayed) return null;
-
     lastDisplayed = roundedProgress;
     const filled = "█".repeat(Math.floor(roundedProgress / 5));
     const unfilled = "░".repeat(20 - filled.length);
     const paddedTaskName = taskName.padEnd(labelWidth, ' ');
-
     return `${paddedTaskName}[${filled}${unfilled}] ${roundedProgress}%`;
   };
 }
@@ -51,7 +49,6 @@ function extractFileData(nibbles) {
   const dataNibbles = [];
   const nameNibbles = [];
   let isReadingName = false;
-
   for (let i = 0; i < nibbles.length; i++) {
     const nibble = nibbles[i];
     switch (nibble) {
@@ -88,10 +85,8 @@ async function processWithLimitedWorkers(filePaths, maxWorkers) {
       worker.on('message', (message) => {
         if (typeof message === 'number') {
           progressTracker[filePaths.indexOf(filePath)] = message;
-
           completedFiles = progressTracker.filter((progress) => progress === 100).length;
           const progressBar = processFilesProgress(completedFiles);
-
           if (progressBar) {
             process.stdout.clearLine();
             process.stdout.cursorTo(0);
@@ -120,14 +115,12 @@ async function processWithLimitedWorkers(filePaths, maxWorkers) {
 
 function playSound(times, delay = 500) {
   let count = 0;
-
   const interval = setInterval(() => {
     exec('powershell -c [System.Media.SystemSounds]::Beep.Play()', (err, stdout, stderr) => {
       if (err) {
         console.error('Error playing sound:', err);
       }
     });
-
     count++;
     if (count >= times) {
       clearInterval(interval);
@@ -136,6 +129,8 @@ function playSound(times, delay = 500) {
 }
 
 async function main() {
+  console.time("Processing Time");
+
   try {
     const files = fs.readdirSync(folderPath).sort((a, b) =>
       a.localeCompare(b, undefined, { numeric: true })
@@ -162,7 +157,6 @@ async function main() {
 
           const regex = /^(\d+)-(\d+)\s([A|D])$/;
           const match = line.match(regex);
-
           if (!match) continue;
 
           const start = parseInt(match[1], 10);
@@ -229,6 +223,10 @@ async function main() {
     console.error('Error processing files:', error);
     playSound(2, 500);
   }
+  
+  console.log("\nAll images processed.");
+  console.timeEnd("Processing Time");
+  
   playSound(1);
 }
 
