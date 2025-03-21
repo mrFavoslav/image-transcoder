@@ -1,3 +1,4 @@
+// workers/imageWorker.js
 const { workerData, parentPort } = require("worker_threads");
 const sharp = require("sharp");
 const fs = require("fs");
@@ -56,41 +57,79 @@ function nibblesToBytes(nibbles) {
 }
 
 function extractFileData(nibbles) {
-  const dataNibbles = [];
-  const identify = [];
-  let isReadingName = false;
-  let nameStartIndex = 0;
-  for (let i = 0; i < nibbles.length; i++) {
-    const nibble = nibbles[i];
-    switch (nibble) {
-      case "A":
-        if (!isReadingName) {
-          nameStartIndex = Math.floor(dataNibbles.length / 2);
-        } else {
-          const nameEndIndex = Math.floor(dataNibbles.length / 2);
-          identify.push({ type: "A", start: nameStartIndex, end: nameEndIndex });
-        }
-        isReadingName = !isReadingName;
-        break;
-      case "D":
-        const dataEndIndex = Math.floor(dataNibbles.length / 2);
-        identify.push({ type: "D", start: dataEndIndex, end: dataEndIndex });
-        i = nibbles.length;
-        break;
-      default:
-        dataNibbles.push(nibble);
+  let segments = [];
+  let nonMarkerNibbles = [];
+  let collectingName = false;
+  let currentFile = null;
+
+  // Projdeme všechny nibbly a akumulujeme pouze ty, které nejsou marker
+  for (let nib of nibbles) {
+    if (nib === "A") {
+      if (!collectingName) {
+        // Start názvu souboru – zaznamenáme počáteční offset (v bajtech)
+        currentFile = {
+          fileNameRange: { start: nonMarkerNibbles.length / 2, end: null },
+          dataRange: { start: null, end: null }
+        };
+        collectingName = true;
+      } else {
+        // Konec názvu souboru – zaznamenáme koncový offset pro název
+        currentFile.fileNameRange.end = nonMarkerNibbles.length / 2;
+        collectingName = false;
+        // Data pro soubor začínají hned za názvem
+        currentFile.dataRange.start = nonMarkerNibbles.length / 2;
+      }
+    } else if (nib === "D") {
+      // Příkaz D – podle nové specifikace zaznamenáme pouze jeden bajt jako konec dat
+      currentFile.dataRange.end = nonMarkerNibbles.length / 2;
+      segments.push(currentFile);
+      currentFile = null;
+    } else {
+      // Akumulujeme reálné nibbly (bez markerů)
+      nonMarkerNibbles.push(nib);
     }
   }
-  return { dataNibbles, identify };
+  return { segments, nonMarkerNibbles };
+}
+
+// Nová funkce pro extrakci více souborů z nibblového proudu
+function extractFilesFromNibbles(nibbles) {
+  const files = [];
+  let i = 0;
+  while (i < nibbles.length) {
+    // Vyhledáme značku A jako začátek názvu
+    while (i < nibbles.length && nibbles[i] !== "A") {
+      i++;
+    }
+    if (i >= nibbles.length) break;
+    i++; // přeskočíme počáteční 'A'
+    const nameNibbles = [];
+    while (i < nibbles.length && nibbles[i] !== "A") {
+      nameNibbles.push(nibbles[i]);
+      i++;
+    }
+    if (i < nibbles.length && nibbles[i] === "A") {
+      i++; // přeskočíme koncovou značku pro název
+    }
+    const dataNibbles = [];
+    // Čteme data až narazíme na značku 'D' (ukončení souboru) nebo případně začátek dalšího souboru ('A')
+    while (i < nibbles.length && nibbles[i] !== "D" && nibbles[i] !== "A") {
+      dataNibbles.push(nibbles[i]);
+      i++;
+    }
+    if (i < nibbles.length && nibbles[i] === "D") {
+      i++; // přeskočíme značku 'D'
+    }
+    files.push({ nameNibbles, dataNibbles });
+  }
+  return files;
 }
 
 async function decodeImage(imagePath) {
   const image = sharp(imagePath);
   const { width, height } = await image.metadata();
   const buffer = await image.raw().toBuffer();
-  let nibbles = [];
-  const binaryFilePath = path.join("./temp", `${path.parse(imagePath).name}.bin`);
-  const identifyFilePath = path.join("./temp", `${path.parse(imagePath).name}.id`);
+  const nibbles = [];
   const totalPixels = width * height;
   let lastReportedProgress = 0;
   for (let i = 0; i < buffer.length; i += 3) {
@@ -106,16 +145,31 @@ async function decodeImage(imagePath) {
     }
   }
   parentPort.postMessage(100);
-  const { dataNibbles, identify } = extractFileData(nibbles);
-  const bytes = nibblesToBytes(dataNibbles);
+
+  const binaryFilePath = path.join("./temp", `${path.parse(imagePath).name}.bin`);
+  const identifyFilePath = path.join("./temp", `${path.parse(imagePath).name}.id`);
+
+  // Využijeme extrakci více souborů
+  const files = extractFilesFromNibbles(nibbles);
+  let combinedNibbles = [];
+  let currentOffset = 0;
+  const identifyEntries = [];
+  files.forEach(file => {
+    const nameBytes = Math.floor(file.nameNibbles.length / 2);
+    const dataBytes = Math.floor(file.dataNibbles.length / 2);
+    identifyEntries.push({ type: "A", start: currentOffset, end: currentOffset + nameBytes });
+    currentOffset += nameBytes;
+    // U značky D nyní zapisujeme rozsah dat (dataBytes)
+    identifyEntries.push({ type: "D", start: currentOffset, end: currentOffset + dataBytes });
+    currentOffset += dataBytes;
+    combinedNibbles = combinedNibbles.concat(file.nameNibbles, file.dataNibbles);
+  });
+  const bytes = nibblesToBytes(combinedNibbles);
   fs.writeFileSync(binaryFilePath, Buffer.from(bytes));
-  if (identify.length > 0) {
-    const identifyContent = identify
-      .map((id) => {
-        if (id.type === "A") return `${id.start}-${id.end} A`;
-        else if (id.type === "D") return `${id.start}-${id.end} D`;
-        return "";
-      })
+
+  if (identifyEntries.length > 0) {
+    const identifyContent = identifyEntries
+      .map(entry => `${entry.start}-${entry.end} ${entry.type}`)
       .join("\n");
     fs.writeFileSync(identifyFilePath, identifyContent);
   }

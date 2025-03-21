@@ -1,3 +1,4 @@
+// main/imageToData.js
 const fs = require('fs');
 const fsExtra = require('fs-extra');
 const path = require('path');
@@ -45,43 +46,18 @@ function nibblesToBytes(nibbles) {
   return bytes;
 }
 
-function extractFileData(nibbles) {
-  const dataNibbles = [];
-  const nameNibbles = [];
-  let isReadingName = false;
-  for (let i = 0; i < nibbles.length; i++) {
-    const nibble = nibbles[i];
-    switch (nibble) {
-      case 'A':
-        isReadingName = !isReadingName;
-        break;
-      case 'D':
-        i = nibbles.length;
-        break;
-      default:
-        if (isReadingName) nameNibbles.push(nibble);
-        else dataNibbles.push(nibble);
-    }
-  }
-  return { dataNibbles, nameNibbles };
-}
-
 async function processWithLimitedWorkers(filePaths, maxWorkers) {
   const progressTracker = new Array(filePaths.length).fill(0);
   const processFilesProgress = createIntermediateProgressOutput('Processing Images ->', filePaths.length);
   let completedFiles = 0;
-
   const results = [];
   const activeWorkers = new Set();
-
   for (const filePath of filePaths) {
     while (activeWorkers.size >= maxWorkers) {
       await Promise.race(activeWorkers);
     }
-
     const workerPromise = new Promise((resolve, reject) => {
       const worker = new Worker('./workers/imageWorker.js', { workerData: filePath });
-
       worker.on('message', (message) => {
         if (typeof message === 'number') {
           progressTracker[filePaths.indexOf(filePath)] = message;
@@ -96,18 +72,15 @@ async function processWithLimitedWorkers(filePaths, maxWorkers) {
           resolve(message);
         }
       });
-
       worker.on('error', reject);
       worker.on('exit', (code) => {
         if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
       });
     });
-
     activeWorkers.add(workerPromise);
     workerPromise.finally(() => activeWorkers.delete(workerPromise));
     results.push(workerPromise);
   }
-
   await Promise.all(results);
   console.log("");
   return results;
@@ -130,7 +103,6 @@ function playSound(times, delay = 500) {
 
 async function main() {
   console.time("Processing Time");
-
   try {
     const files = fs.readdirSync(folderPath).sort((a, b) =>
       a.localeCompare(b, undefined, { numeric: true })
@@ -138,75 +110,42 @@ async function main() {
     const filePaths = files.map((file) => path.join(folderPath, file));
     const results = await processWithLimitedWorkers(filePaths, MAX_WORKERS);
     const resolvedResults = await Promise.all(results);
-
     const streamFinished = util.promisify(require('stream').finished);
     const extractProgress = createIntermediateProgressOutput('Saving file ->', results.length);
-    let dataFileStream = null;
 
     for (let index = 0; index < resolvedResults.length; index++) {
       const tempFilePath = resolvedResults[index];
-      let fileContent = fs.readFileSync(tempFilePath);
+      const fileContent = fs.readFileSync(tempFilePath);
       const identifyFilePath = path.join(tempFolder, `${path.parse(tempFilePath).name}.id`);
 
+      // Nové zpracování identifikačního souboru – očekáváme páry řádků (A a D)
       if (fs.existsSync(identifyFilePath)) {
-        const identifyLines = fs.readFileSync(identifyFilePath, 'utf8').split('\n');
-        let currentByteOffset = 0;
-
-        for (const line of identifyLines) {
-          if (!line.trim()) continue;
-
-          const regex = /^(\d+)-(\d+)\s([A|D])$/;
-          const match = line.match(regex);
-          if (!match) continue;
-
-          const start = parseInt(match[1], 10);
-          const end = parseInt(match[2], 10);
-          const identifier = match[3];
-
-          if (identifier === 'A') {
-            const extractedBytes = fileContent.slice(start, end);
-            const extractedName = extractedBytes.toString('utf-8').replace(/\0/g, '').trim();
-            const outputFilePath = path.join(outputFolder, extractedName);
-        
-            const outputDir = path.dirname(outputFilePath);
-            fsExtra.ensureDirSync(outputDir);
-        
-            if (dataFileStream) {
-                dataFileStream.end();
-                await streamFinished(dataFileStream);
-            }
-        
-            dataFileStream = fs.createWriteStream(outputFilePath);
-            currentByteOffset = 0;
-        
-            fileContent = Buffer.concat([
-                fileContent.slice(0, start),
-                fileContent.slice(end),
-            ]);
-          }
-
-          if (identifier === 'D') {
-            const bytesToWrite = end - currentByteOffset;
-            const contentToWrite = fileContent.slice(0, bytesToWrite);
-
-            if (dataFileStream) {
-              dataFileStream.write(contentToWrite);
-              currentByteOffset += contentToWrite.length;
-              dataFileStream.end();
-              await streamFinished(dataFileStream);
-              dataFileStream = null;
-            }
-
-            fileContent = fileContent.slice(bytesToWrite);
+        const lines = fs.readFileSync(identifyFilePath, 'utf8')
+          .split('\n')
+          .filter(line => line.trim() !== "");
+        if (lines.length % 2 !== 0) {
+          console.error("Invalid identify file format: expected even number of lines.");
+        } else {
+          for (let i = 0; i < lines.length; i += 2) {
+            const aLine = lines[i];
+            const dLine = lines[i + 1];
+            // Opravený regulární výraz – bez zbytečného "|"
+            const matchA = aLine.match(/^(\d+)-(\d+)\sA$/);
+            const matchD = dLine.match(/^(\d+)-(\d+)\sD$/);
+            if (!matchA || !matchD) continue;
+            const aStart = parseInt(matchA[1], 10);
+            const aEnd = parseInt(matchA[2], 10);
+            const dStart = parseInt(matchD[1], 10);
+            const dEnd = parseInt(matchD[2], 10);
+            const nameBuffer = fileContent.slice(aStart, aEnd);
+            const fileName = nameBuffer.toString('utf8').replace(/\0/g, '').trim();
+            const fileData = fileContent.slice(dStart, dEnd);
+            const outputFilePath = path.join(outputFolder, fileName);
+            fsExtra.ensureDirSync(path.dirname(outputFilePath));
+            fs.writeFileSync(outputFilePath, fileData);
           }
         }
       }
-
-      if (dataFileStream) {
-        dataFileStream.write(fileContent);
-        fileContent = null;
-      }
-
       const progressBar = extractProgress(index + 1);
       if (progressBar) {
         process.stdout.clearLine();
@@ -214,19 +153,12 @@ async function main() {
         process.stdout.write(progressBar);
       }
     }
-
-    if (dataFileStream) {
-      dataFileStream.end();
-      await streamFinished(dataFileStream);
-    }
   } catch (error) {
     console.error('Error processing files:', error);
     playSound(2, 500);
   }
-  
   console.log("\nAll images processed.");
   console.timeEnd("Processing Time");
-  
   playSound(1);
 }
 
