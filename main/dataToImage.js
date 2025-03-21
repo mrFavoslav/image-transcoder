@@ -196,6 +196,35 @@ function GenerateImagesFromRGBData(width, height, outputDir) {
   imageCreationPromises.push(promise);
 }
 
+function FlushCompleteImages(width, height, outputDir) {
+  const expectedSize = width * height;
+  while (RGBDataArray.length >= expectedSize) {
+    const imageArray = RGBDataArray.slice(0, expectedSize);
+    RGBDataArray = RGBDataArray.slice(expectedSize);
+    const outputFilePath = path.join(outputDir, `${++imageCounter}.png`);
+    const promise = imageWorkerPool.schedule(() =>
+      createImageWithWorker(imageArray, width, height, outputFilePath)
+    );
+    imageCreationPromises.push(promise);
+  }
+}
+
+function FlushFinalImage(width, height, outputDir) {
+  const expectedSize = width * height;
+  if (RGBDataArray.length > 0) {
+    // Doplň chybějící pixely černou barvou
+    const imageArray = RGBDataArray.concat(
+      Array(expectedSize - RGBDataArray.length).fill({ r: 0, g: 0, b: 0 })
+    );
+    RGBDataArray = [];
+    const outputFilePath = path.join(outputDir, `${++imageCounter}.png`);
+    const promise = imageWorkerPool.schedule(() =>
+      createImageWithWorker(imageArray, width, height, outputFilePath)
+    );
+    imageCreationPromises.push(promise);
+  }
+}
+
 // Přechod na streamové zpracování – místo načítání celého souboru do paměti
 function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
   return new Promise((resolve, reject) => {
@@ -247,12 +276,10 @@ function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
       chunkIndex++;
     });
     stream.on("end", () => {
-      // Po skončení streamu čekáme na zpracování všech worker úloh
       Promise.all(chunkPromises)
         .then(() => {
-          if (RGBDataArray.length > 0) {
-            GenerateImagesFromRGBData(imageWidth, imageHeight, output);
-          }
+          // Flushujeme jen kompletní obrazy (neboť nedokončený blok chceme předat dalšímu souboru)
+          FlushCompleteImages(imageWidth, imageHeight, output);
           // Ujistíme se, že progress bar dosáhne 100%
           const remaining = totalBytes - progressManager.completedWorkUnits;
           if (remaining > 0) {
@@ -303,10 +330,17 @@ console.time("Processing Time");
 async function processFiles(input) {
   if (fs.statSync(input).isDirectory()) {
     const allFiles = getAllFiles(input);
-    for (const file of allFiles) {
+    for (let i = 0; i < allFiles.length; i++) {
+      const file = allFiles[i];
       try {
         PushFilename(file);
         await ConvertFileToRGB(file, imageWidth, imageHeight, output);
+        // Pokud to není poslední soubor, vložíme terminátor D
+        if (i < allFiles.length - 1) {
+          RGBDataArray.push({ r: 128, g: 0, b: 128 });
+          // Flushnout kompletní bloky, kdy by tento pixel mohl uzavřít jeden obraz
+          FlushCompleteImages(imageWidth, imageHeight, output);
+        }
       } catch (error) {
         console.error("Error processing file:", error.message);
       }
@@ -319,7 +353,8 @@ async function processFiles(input) {
       console.error("Error processing file:", error.message);
     }
   }
-  // Po zpracování všech souborů počkáme, až se vytvoří všechny obrázky
+  // Po zpracování všech souborů flushneme poslední (může být neúplný – ten se doplní černými pixely)
+  FlushFinalImage(imageWidth, imageHeight, output);
   await Promise.all(imageCreationPromises);
 }
 
