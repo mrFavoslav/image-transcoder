@@ -1,4 +1,3 @@
-// workers/createImageWorker.js
 const { workerData, parentPort } = require("worker_threads");
 const sharp = require("sharp");
 
@@ -13,6 +12,13 @@ for (let i = 0; i < Math.min(rgbArray.length, width * height); i++) {
 }
 
 sharp(Buffer.from(pixelData), { raw: { width, height, channels: 3 } })
+  .png({ 
+    compressionLevel: 0,
+    palette: false,
+    quality: 100,
+    progressive: false,
+    force: true
+  })
   .toFile(outputFilePath)
   .then(() => {
     parentPort.postMessage("done");
