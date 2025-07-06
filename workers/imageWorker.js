@@ -1,4 +1,3 @@
-// workers/imageWorker.js
 const { workerData, parentPort } = require("worker_threads");
 const sharp = require("sharp");
 const fs = require("fs");
@@ -34,8 +33,27 @@ const colors = Object.entries(colorMap).map(([nibble, { r, g, b }]) => ({
   b,
 }));
 
-// Returns the nibble (as a string) that closely matches the pixel's RGB.
+/*function findClosestNibble(r, g, b) {
+  let closest = "0000";
+  let smallestDiff = Infinity;
+  for (const { nibble, r: cr, g: cg, b: cb } of colors) {
+    const diff = Math.abs(cr - r) + Math.abs(cg - g) + Math.abs(cb - b);
+    if (diff < smallestDiff) {
+      smallestDiff = diff;
+      closest = nibble;
+    }
+  }
+  return closest;
+}*/
+
 function findClosestNibble(r, g, b) {
+  for (const { nibble, r: cr, g: cg, b: cb } of colors) {
+    if (cr === r && cg === g && cb === b) {
+      return nibble;
+    }
+  }
+  
+  console.warn(`Approximate match for RGB(${r},${g},${b})`);
   let closest = "0000";
   let smallestDiff = Infinity;
   for (const { nibble, r: cr, g: cg, b: cb } of colors) {
@@ -48,7 +66,7 @@ function findClosestNibble(r, g, b) {
   return closest;
 }
 
-// Convert an array of nibble strings to a byte array.
+
 function nibblesToBytes(nibbles) {
   const bytes = [];
   for (let i = 0; i < nibbles.length; i += 2) {
@@ -58,13 +76,6 @@ function nibblesToBytes(nibbles) {
   return bytes;
 }
 
-/*
-  Extraction logic (old‑style):
-  Walks through the nibble stream:
-  - When an "A" is encountered, it toggles name reading.
-  - On the closing "A", an "A" marker is recorded (with start and end offsets in bytes).
-  - When a "D" is seen, a "D" marker is recorded and processing stops.
-*/
 function extractFileData(nibbles) {
   const dataNibbles = [];
   const identify = [];
@@ -75,19 +86,18 @@ function extractFileData(nibbles) {
     const nib = nibbles[i];
     if (nib === "A") {
       if (!isReadingName) {
-        // Začínáme číst název souboru – nastavíme počáteční index (v bajtech)
         nameStartIndex = Math.floor(dataNibbles.length / 2);
       } else {
-        // Dokončili jsme čtení názvu – zaznamenáme A marker s počátečním a koncovým indexem
         const nameEndIndex = Math.floor(dataNibbles.length / 2);
         identify.push({ type: "A", start: nameStartIndex, end: nameEndIndex });
       }
       isReadingName = !isReadingName;
     } else if (nib === "D") {
-      // Na detekci D markeru zaznamenáme ukončení aktuálního souboru
       const dataEndIndex = Math.floor(dataNibbles.length / 2);
       identify.push({ type: "D", start: dataEndIndex, end: dataEndIndex });
-      // Místo "break" už pokračujeme ve zpracování, abychom načetli i další soubory
+      if (i + 1 < nibbles.length && nibbles[i + 1] !== "A") {
+        break;
+      }
     } else {
       dataNibbles.push(nib);
     }
@@ -103,7 +113,6 @@ async function decodeImage(imagePath) {
   const totalPixels = width * height;
   let lastReportedProgress = 0;
 
-  // Process each pixel and convert its color to a nibble.
   for (let i = 0; i < buffer.length; i += 3) {
     const r = buffer[i],
           g = buffer[i + 1],
@@ -122,7 +131,6 @@ async function decodeImage(imagePath) {
   const binaryFilePath = path.join("./temp", `${path.parse(imagePath).name}.bin`);
   const identifyFilePath = path.join("./temp", `${path.parse(imagePath).name}.id`);
 
-  // Extract the file data and marker positions.
   const { dataNibbles, identify } = extractFileData(nibbles);
   const bytes = nibblesToBytes(dataNibbles);
   fs.writeFileSync(binaryFilePath, Buffer.from(bytes));
