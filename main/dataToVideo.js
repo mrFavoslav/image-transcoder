@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 "use strict";
 
 const fs = require("fs");
@@ -8,12 +7,10 @@ const { spawn } = require("child_process");
 const prompt = require("prompt-sync")();
 const ProgressManager = require("./progressManager");
 
-// Konfigurace videa
 const videoWidth = 1920;
 const videoHeight = 1080;
 const frameSize = videoWidth * videoHeight * 3;
 
-// Kódovací barevná mapa (stejná, jakou používáme pro převod nibble na pixel)
 const colorMap = {
   "0": { r: 255, g: 255, b: 255 },
   "1": { r: 0, g: 0, b: 0 },
@@ -33,7 +30,6 @@ const colorMap = {
   "F": { r: 192, g: 192, b: 192 }
 };
 
-// Pomocná funkce: převod řetězce na nibble – každý znak se převede na dvě 4-bitové hodnoty
 function stringToNibbles(str) {
   let nibbles = [];
   for (const char of str) {
@@ -44,7 +40,6 @@ function stringToNibbles(str) {
   return nibbles;
 }
 
-// Vrací barvu podle nibble – nibble se nejprve převede z binárního řetězce na hexadecimální znak.
 function getColorFromNibble(nibble) {
   if (!colorMap[nibble]) {
     console.warn(`Invalid nibble: ${nibble}`);
@@ -53,24 +48,19 @@ function getColorFromNibble(nibble) {
   return colorMap[nibble];
 }
 
-// Funkce vloží do pixelového proudu informaci o názvu souboru pomocí markerů
 function pushFilename(filename, appendPixel) {
-  // Marker začátku – použijeme pixel {128,128,128}
   appendPixel({ r: 128, g: 128, b: 128 });
   const nibbles = stringToNibbles(filename);
   for (const nib of nibbles) {
     const hexDigit = parseInt(nib, 2).toString(16).toUpperCase();
     appendPixel(getColorFromNibble(hexDigit));
   }
-  // Marker konce názvu
   appendPixel({ r: 128, g: 128, b: 128 });
 }
 
-// Globální buffer a offset pro aktuální snímek
 let currentFrameBuffer = Buffer.alloc(frameSize);
 let currentOffset = 0;
 
-// Funkce, která přidá pixel do aktuálního snímkového bufferu a v případě, že je snímek plný, ho ihned odešle do ffmpeg.
 function appendPixel(pixel, ffmpegStdin) {
   if (currentOffset + 3 > frameSize) {
     flushFrameBuffer(ffmpegStdin);
@@ -86,7 +76,6 @@ function appendPixel(pixel, ffmpegStdin) {
   }
 }
 
-// Pokud zbyde částečný snímek, doplní ho černou barvou a odešle.
 function flushFrameBuffer(ffmpegStdin) {
   if (currentOffset > 0) {
     currentFrameBuffer.fill(0, currentOffset);
@@ -96,7 +85,6 @@ function flushFrameBuffer(ffmpegStdin) {
   }
 }
 
-// Převod datového chunku na pole pixelů (každý byte se převede na dvě barvy podle hexadecimální hodnoty)
 function processDataChunk(chunk) {
   let pixels = [];
   for (let i = 0; i < chunk.length; i++) {
@@ -109,7 +97,6 @@ function processDataChunk(chunk) {
   return pixels;
 }
 
-// Získá všechny soubory z adresáře (rekurzivně)
 function getAllFiles(dir, fileList = []) {
   const files = fs.readdirSync(dir);
   files.forEach(file => {
@@ -124,8 +111,12 @@ function getAllFiles(dir, fileList = []) {
 }
 
 async function main() {
-  const inputPath = process.argv[2] || prompt("Define input file/directory: ");
-  const outputVideoPath = path.join(__dirname, "./../output_video/out.mkv");
+  const inputPath = path.resolve(process.argv[2] || prompt("Define input file/directory: "));
+  const outputVideoPath = path.join(__dirname, "./../output_video");
+
+  if (!fs.existsSync(outputVideoPath)) fs.mkdirSync(outputVideoPath);
+  fsExtra.emptyDirSync(outputVideoPath);
+  
   let files = [];
   if (fs.statSync(inputPath).isDirectory()) {
     files = getAllFiles(inputPath);
@@ -135,7 +126,6 @@ async function main() {
 
   console.log(`Budu zpracovávat ${files.length} souborů.`);
 
-  // Spuštění ffmpeg pro kódování raw videa do lossless videa pomocí ffv1
   const ffmpegArgs = [
     "-y",
     "-f",
@@ -150,9 +140,7 @@ async function main() {
     "-",
     "-c:v",
     "ffv1",
-    "-preset",
-    "ultrafast",
-    outputVideoPath,
+    `${outputVideoPath}/out.mkv`,
   ];
   const ffmpeg = spawn("ffmpeg", ffmpegArgs);
 
@@ -162,18 +150,15 @@ async function main() {
   });
 
   ffmpeg.stderr.on("data", (data) => {
-    // Volitelně můžeš logovat progres; zatím zakomentováno
     // console.error(data.toString());
   });
 
-  // Použijeme číslovaný cyklus, abychom věděli, jestli zpracováváme poslední soubor
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     console.log(`Zpracovávám soubor: ${file}`);
     const fileSize = fs.statSync(file).size;
     const progressManager = new ProgressManager(fileSize, path.basename(file));
 
-    // Vložíme název souboru jako marker
     pushFilename(file, (pixel) => {
       appendPixel(pixel, ffmpeg.stdin);
     });
@@ -188,19 +173,16 @@ async function main() {
         }
       });
       stream.on("end", () => {
-        // Vložíme terminátor – marker D: pixel s hodnotami {128, 0, 128}
         appendPixel({ r: 128, g: 0, b: 128 }, ffmpeg.stdin);
-        // Pokud je to poslední soubor, doplníme aktuální snímek (neúplný blok) černými pixely a flushneme ho.
         if (i === files.length - 1) {
           flushFrameBuffer(ffmpeg.stdin);
         }
-        console.log(`Dokončeno: ${file}`);
+        console.log(`\nDokončeno: ${file}`);
         resolve();
       });
       stream.on("error", (err) => reject(err));
     });
   }
-  // Po zpracování všech souborů flushneme zůstalé pixely a ukončíme stdin ffmpeg
   flushFrameBuffer(ffmpeg.stdin);
   ffmpeg.stdin.end();
 
