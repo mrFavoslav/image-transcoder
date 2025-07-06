@@ -1,0 +1,9 @@
+node_modules/
+images/*
+.vscode/
+output_video/*
+temp/*
+*.hex
+*.txt
+output/*
+main/vojtaEdit.js
