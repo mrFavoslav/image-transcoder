@@ -2,19 +2,18 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("node:os");
 const fsExtra = require("fs-extra");
 const prompt = require("prompt-sync")();
 const { Worker } = require("worker_threads");
 const ProgressManager = require("./progressManager");
 
-// Globální proměnné
 let RGBDataArray = [];
 let imageCounter = 0;
 let imageCreationPromises = [];
 
-let MAX_WORKERS = 6;
+let MAX_WORKERS = os.cpus().length;
 
-// Persistentní pool pro data processing
 class DataWorkerPool {
   constructor(workerPath, size, progressManager) {
     this.workerPath = workerPath;
@@ -34,7 +33,6 @@ class DataWorkerPool {
           if (msg.error) {
             worker.currentTask.reject(new Error(msg.error));
           } else {
-            // Vracíme výsledek spolu s původním indexem
             worker.currentTask.resolve({ result: msg.result, index: worker.currentTask.data.index });
           }
           worker.currentTask = null;
@@ -84,7 +82,6 @@ class DataWorkerPool {
   }
 }
 
-// Pomocné funkce pro převod názvu na nibble řetězce a získání barev
 function StringToNibbles(str) {
   return str.split("").flatMap((char) => {
     const binaryValue = char.charCodeAt(0).toString(2).padStart(8, "0");
@@ -119,7 +116,6 @@ function GetColorFromNibble(nibble) {
   return colorMap[nibble];
 }
 
-// Vložíme do dat informaci o názvu / cestě souboru
 function PushFilename(name) {
   RGBDataArray.push({ r: 128, g: 128, b: 128 });
   const nibbleArray = StringToNibbles(name);
@@ -129,7 +125,6 @@ function PushFilename(name) {
   RGBDataArray.push({ r: 128, g: 128, b: 128 });
 }
 
-// Worker pool pro tvorbu obrázků (max. MAX_WORKERS současně)
 const imageWorkerPool = {
   limit: MAX_WORKERS,
   running: 0,
@@ -211,7 +206,6 @@ function FlushCompleteImages(width, height, outputDir) {
 function FlushFinalImage(width, height, outputDir) {
   const expectedSize = width * height;
   if (RGBDataArray.length > 0) {
-    // Přesvědčíme se, že poslední pixel je marker D – pokud ne, vložíme ho.
     if (
       RGBDataArray.length === 0 ||
       RGBDataArray[RGBDataArray.length - 1].r !== 128 ||
@@ -220,7 +214,6 @@ function FlushFinalImage(width, height, outputDir) {
     ) {
       RGBDataArray.push({ r: 128, g: 0, b: 128 });
     }
-    // Doplň chybějící pixely černou barvou
     const imageArray = RGBDataArray.concat(
       Array(expectedSize - RGBDataArray.length).fill({ r: 0, g: 0, b: 0 })
     );
@@ -233,7 +226,6 @@ function FlushFinalImage(width, height, outputDir) {
   }
 }
 
-// Přechod na streamové zpracování – místo načítání celého souboru do paměti
 function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(filePath)) {
@@ -241,7 +233,6 @@ function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
       return;
     }
     const totalBytes = fs.statSync(filePath).size;
-    // --- Úprava progress baru: předáváme aktuální název souboru do ProgressManageru.
     const progressManager = new ProgressManager(totalBytes, path.basename(filePath));
     const pool = new DataWorkerPool(path.join(__dirname, "../workers/dataToImageWorker.js"), MAX_WORKERS, progressManager);
     const CHUNK_SIZE = 1024 * 1024; // 1 MB
@@ -283,7 +274,6 @@ function ConvertFileToRGB(filePath, imageWidth, imageHeight, output) {
       Promise.all(chunkPromises)
         .then(() => {
           FlushCompleteImages(imageWidth, imageHeight, output);
-          // Ujistíme se, že progress bar dosáhne 100%
           const remaining = totalBytes - progressManager.completedWorkUnits;
           if (remaining > 0) {
             progressManager.update(remaining);
@@ -311,12 +301,10 @@ function getAllFiles(dirPath, filesArray = []) {
 }
 
 function playSound(times, delay = 500) {
-  const { exec } = require("child_process");
   let count = 0;
+  const bell = "\u0007";
   const interval = setInterval(() => {
-    exec('powershell -c [System.Media.SystemSounds]::Beep.Play()', (err) => {
-      if (err) console.error("Error playing sound:", err);
-    });
+    process.stdout.write(bell);
     count++;
     if (count >= times) clearInterval(interval);
   }, delay);
@@ -324,9 +312,10 @@ function playSound(times, delay = 500) {
 
 const imageWidth = 1920;
 const imageHeight = 1080;
-const input = process.argv[2] || prompt("Define input file/directory: ");
+const input = path.resolve(process.argv[2] || prompt("Define input file/directory: "));
 const output = path.join(__dirname, "./../images");
 
+if (!fs.existsSync(output)) fs.mkdirSync(output);
 fsExtra.emptyDirSync(output);
 console.time("Processing Time");
 
@@ -336,10 +325,8 @@ async function processFiles(input) {
     for (let i = 0; i < allFiles.length; i++) {
       const file = allFiles[i];
       try {
-        // Zobrazíme název souboru, který se zpracovává (PushFilename vloží informativní pixely)
         PushFilename(file);
         await ConvertFileToRGB(file, imageWidth, imageHeight, output);
-        // Vložíme terminátor D vždy po zpracování souboru, včetně posledního
         RGBDataArray.push({ r: 128, g: 0, b: 128 });
         FlushCompleteImages(imageWidth, imageHeight, output);
       } catch (error) {
@@ -350,13 +337,11 @@ async function processFiles(input) {
     try {
       PushFilename(input);
       await ConvertFileToRGB(input, imageWidth, imageHeight, output);
-      // Vložíme terminátor D i u jediného souboru
       RGBDataArray.push({ r: 128, g: 0, b: 128 });
     } catch (error) {
       console.error("Error processing file:", error.message);
     }
   }
-  // Po zpracování všech souborů flushneme poslední (neúplný blok je doleplněn černými pixely)
   FlushFinalImage(imageWidth, imageHeight, output);
   await Promise.all(imageCreationPromises);
 }
