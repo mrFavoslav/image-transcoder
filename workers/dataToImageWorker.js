@@ -1,10 +1,8 @@
-// workers/dataToImageWorker.js
 "use strict";
 
 const { parentPort } = require("worker_threads");
 
 function processChunk(bufferData) {
-  // Pokud bufferData není Buffer, převedeme jej pomocí Buffer.from()
   const buffer = Buffer.isBuffer(bufferData) ? bufferData : Buffer.from(bufferData);
   const total = buffer.length;
   let result = [];
@@ -38,7 +36,6 @@ function processChunk(bufferData) {
   return result;
 }
 
-// Persistentní režim – čekáme na příchozí úkol (chunk a index)
 parentPort.on("message", (data) => {
   try {
     const resultArray = processChunk(data.chunk);
