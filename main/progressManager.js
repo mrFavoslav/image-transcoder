@@ -11,9 +11,8 @@ class ProgressManager {
     const rounded = Math.round(percentage);
     const filledBars = "█".repeat(Math.floor(rounded / 5));
     const unfilledBars = "░".repeat(20 - Math.floor(rounded / 5));
-    // Vymažeme aktuální řádek a zapíšeme progress bar s názvem souboru
-    process.stdout.clearLine();
-    process.stdout.cursorTo(0);
+    process.stdout.clearLine ? process.stdout.clearLine() : process.stdout.write("\x1B[2K");
+    process.stdout.cursorTo ? process.stdout.cursorTo(0) : process.stdout.write("\x1B[0G");
     process.stdout.write(`${this.fileName} [${filledBars}${unfilledBars}] ${rounded}%`);
   }
 }
